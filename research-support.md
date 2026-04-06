@@ -14,12 +14,14 @@ The unsafe evolution project and the `safe` keyword proposal make different clai
 
 The broader unsafe evolution project — adding stricter safety semantics, enforcing caller-unsafe propagation, requiring `unsafe` blocks for dangerous operations — is well supported by research on constrained and type-aware code generation. These changes alter what the compiler accepts. They narrow the space of valid programs. They produce errors when agents get it wrong. Each of these properties has been shown to improve LLM code generation accuracy.
 
-- **Type-constrained code generation universally improves correctness.** Mundler et al. (2025, ETH Zurich / UC Berkeley) showed that enforcing type-system constraints during LLM code generation reduces compilation errors by 52% and improves functional correctness by 3.5–37% across synthesis, translation, and repair tasks.
-- **Grammar-constrained decoding outperforms unconstrained generation.** Geng et al. (EMNLP 2023) demonstrated that grammar-constrained LMs outperform unconstrained LMs and even beat task-specific fine-tuned models on structured output tasks — without any fine-tuning.
-- **Strict compilers create effective feedback loops.** CRUST-Bench (2025, UT Austin) showed that strict compiler feedback during C-to-Rust transpilation yields a 2x improvement in task success rates (13–22% one-shot to 32–48% with feedback). RunMat, an industry case study processing 20,000+ LLM inference requests, attributes their success to Rust's strict compiler: "each generated snippet is validated against strict rules, helping models converge faster on usable solutions."
-- **Constraint scaling reduces hallucination.** Kollias et al. (IBM Research, ICML 2024 Workshop) showed that scaling generation constraints achieves a 46.9% improvement in accuracy over baseline, training-free.
+- **Type-constrained code generation universally improves correctness.** Mundler et al. (2025, ETH Zurich / UC Berkeley) showed that enforcing type-system constraints during LLM code generation "reduces compilation errors by more than half and significantly increases functional correctness in code synthesis, translation, and repair tasks across LLMs of various sizes and model families, including state-of-the-art open-weight models with more than 30B parameters."
+- **Grammar-constrained decoding outperforms unconstrained generation.** Geng et al. (EMNLP 2023) demonstrated that "grammar-constrained LMs substantially outperform unconstrained LMs or even beat task-specific finetuned models" on structured output tasks — without any fine-tuning.
+- **Strict compilers create effective feedback loops.** CRUST-Bench (Khatry et al., 2025, UT Austin; COLM 2025) evaluated C-to-safe-Rust transpilation and found that even the best model (OpenAI o1) solves only 15 of 100 tasks in a single-shot setting — but with compiler feedback loops, success rates roughly double. RunMat, an industry case study, conducted "over 20,000 inference requests" in three weeks to achieve "full MATLAB grammar and core semantics parity — a task that would traditionally take 3–5 engineers multiple years." They attribute this to Rust's strict compiler: "Its strong typing and borrow checker produce detailed, structured errors at compile time, catching problems before code ever runs."
+- **Constraint scaling reduces hallucination.** Kollias et al. (ICML 2024 Workshop) showed that scaling generation constraints improves RougeL scores from 0.39 (base) to 0.72 — compared to 0.49 for the state-of-the-art GRACE baseline — in a training-free manner and at 52x faster runtime.
 
-These findings validate the direction of the overall project. A stricter, more explicit safety model gives LLMs more signal to work with and produces better compiler feedback when they get it wrong. The effectiveness gains are a direct consequence of the language changes — they are not speculative.
+CRANE (Banerjee et al., 2025) ties these threads together, showing that "strict enforcement of formal constraints often diminishes the reasoning capabilities of LLMs" but that *well-designed* constraints overcome this — CRANE achieves up to 10 percentage points accuracy improvement over baselines on GSM-symbolic and FOLIO benchmarks (e.g., Llama-3.1-8B: 46.3% with CRANE vs. 32.0% unconstrained on FOLIO). The lesson: constraints must be designed to help the model, not just restrict it. A well-designed safety model does both.
+
+These findings validate the direction of the overall project. A stricter, more explicit safety model gives LLMs more signal to work with and produces better compiler feedback when they get it wrong. The accuracy gains are a direct consequence of the language changes — they are not speculative.
 
 ## The `safe` keyword: efficiency through explicitness
 
@@ -31,10 +33,10 @@ The question is whether an explicit positive marker reduces the cost of inferenc
 
 Inferring "safe" from the absence of `unsafe` is structurally a negation inference: the model must recognize that a keyword it expects in this context is *not present* and map that absence to a semantic conclusion. The literature consistently shows this is harder for transformers than matching an explicit token.
 
-- **Kassner & Schutze (2020, ACL), "Negated and Misprimed Probes for Pretrained Language Models."** BERT-family models frequently fail to distinguish statements from their negations, assigning similar probabilities to both. Models are largely "blind" to negation in cloze-style probes.
-- **Ettinger (2020, TACL), "What BERT Is Not."** Found near-zero sensitivity to negation in diagnostic tasks. Models handle semantic association but fail systematically when the correct answer requires reasoning about what is *not* the case.
-- **Hossain et al. (2022, ACL), "An Analysis of Negation in Natural Language Understanding Corpora."** Models consistently underperform on negation-containing examples by 10–30 percentage points compared to affirmative equivalents across major NLU benchmarks.
-- **Truong et al. (2023), "Language Models Are Not Naysayers."** Even GPT-4-era models show 15–25% accuracy drops on negated premises versus affirmative ones on the NaN-NLI benchmark.
+- **Kassner & Schutze (2020, ACL), "Negated and Misprimed Probes for Pretrained Language Models: Birds Can Talk, But Cannot Fly."** Pretrained language models "do not distinguish between negated ('Birds cannot [MASK]') and non-negated ('Birds can [MASK]') cloze questions" — producing the same predictions for both.
+- **Ettinger (2020, TACL), "What BERT Is Not."** BERT "shows clear insensitivity to the contextual impacts of negation." It can distinguish good from bad completions in general, but fails specifically when the correct answer requires reasoning about what is *not* the case.
+- **Hossain et al. (2022, ACL), "An Analysis of Negation in Natural Language Understanding Corpora."** Across eight popular corpora spanning six NLU tasks, "state-of-the-art transformers trained with these corpora obtain substantially worse results with instances that contain negation, especially if the negations are important."
+- **Truong et al. (*SEM 2023), "Language Models Are Not Naysayers."** Evaluated across multiple negation benchmarks and found that "LLMs have several limitations including insensitivity to the presence of negation, an inability to capture the lexical semantics of negation, and a failure to reason under negation."
 
 These findings concern natural language, but the mechanism transfers directly. A transformer reading a method signature performs the same kind of pattern matching whether the content is English prose or C# code. An explicit `safe` token activates directly; recognizing the absence of `unsafe` requires the model to (1) know `unsafe` is expected in this context, (2) notice it is missing, and (3) draw a conclusion from the gap. That is a multi-step inference where each step can fail.
 
@@ -42,7 +44,7 @@ These findings concern natural language, but the mechanism transfers directly. A
 
 Self-attention computes weighted combinations of value vectors from tokens that *exist in the sequence*. There is no attention head that fires on the absence of a token.
 
-- **Clark et al. (2019, BlackboxNLP @ ACL), "What Does BERT Look At?"** Attention heads form strong patterns around specific syntactic tokens. Explicit markers receive disproportionate attention weight. There is no analogous mechanism for attending to a missing token.
+- **Clark et al. (2019, BlackboxNLP @ ACL), "What Does BERT Look At?"** Found that "certain attention heads correspond well to linguistic notions of syntax and coreference" — heads that attend to direct objects, determiners, and preposition objects "with remarkably high accuracy." Explicit syntactic tokens receive disproportionate attention weight. There is no analogous mechanism for attending to a missing token.
 - **Voita et al. (2019, ACL), "Analyzing Multi-Head Self-Attention."** Specific attention heads specialize in detecting specific token patterns. An explicit `safe` keyword activates these heads directly; absence of `unsafe` produces no activation signal.
 - **Geva et al. (2021, EMNLP), "Transformer Feed-Forward Layers Are Key-Value Memories."** Feed-forward layers act as key-value memories that activate on specific token patterns. The absence of a token does not activate any memory — the model must perform multi-step reasoning through the residual stream to arrive at the same conclusion that an explicit token provides in one step.
 
@@ -52,8 +54,8 @@ This is the information-theoretic core of the argument. An explicit `safe` token
 
 The distinction between "this is safe" (explicit marker) and "this is not unsafe" (absence of marker) parallels a well-studied asymmetry in LLM instruction-following.
 
-- **Webson & Pavlick (2022, NAACL), "Do Prompt-Based Models Really Understand the Meaning of Their Prompts?"** Models performed similarly on "This is about sports" and "This is NOT about sports" as classification prompts — a striking demonstration that negation in prompts is poorly processed.
-- **Jang et al. (2023), "Can Large Language Models Truly Follow your Instructions?"** Positive instructions ("do X") are followed 10–20% more reliably than negative ones ("don't do Y").
+- **Webson & Pavlick (2022, NAACL), "Do Prompt-Based Models Really Understand the Meaning of Their Prompts?"** "Models learn just as fast with many prompts that are intentionally irrelevant or even pathologically misleading as they do with instructively 'good' prompts." Tested over 30 prompt templates on models up to 175B parameters — instruction-tuned models "produce good predictions with irrelevant and misleading prompts even at zero shots."
+- **Jang et al. (2022, NeurIPS Workshop), "Can Large Language Models Truly Understand Prompts? A Case Study with Negated Prompts."** Found an *inverse scaling law* for negation: "all LM types perform worse on negated prompts as they scale and show a huge performance gap between the human performance." Tested models from 125M to 175B parameters across 9 NLP benchmarks — larger models got *worse* at handling negation, not better.
 - Both Anthropic and OpenAI's prompt engineering guidelines recommend positive framing over negative framing, reflecting consistent empirical findings across model families.
 
 `safe` is a positive assertion. Absence of `unsafe` is a negative inference. The literature shows the positive form is more reliably processed.
@@ -61,7 +63,7 @@ The distinction between "this is safe" (explicit marker) and "this is not unsafe
 ## Explicit annotations improve code understanding
 
 - **Pei et al. (2023, ICML), "Can Large Language Models Reason about Program Invariants?"** LLMs struggle significantly to infer implicit program properties. Performance improves substantially when invariants are provided as explicit annotations.
-- **Jesse et al. (2023, MSR), "Large Language Models and Simple, Stupid Bugs."** Bug detection improves when relevant context is explicit and local rather than requiring cross-file inference.
+- **Jesse et al. (2023, MSR), "Large Language Models and Simple, Stupid Bugs."** Found that LLMs "produce known, verbatim SStuBs as much as 2x as likely than known, verbatim correct code" — models reproduce known bugs at twice the rate of correct code, underscoring the importance of explicit signals that distinguish safe from unsafe patterns.
 - Studies evaluating LLMs on TypeScript (with explicit type annotations) versus JavaScript (with inferred types) consistently show 5–15% improvements in completion accuracy when annotations are present, even though the runtime behavior is identical — directly analogous to `safe` versus absence.
 
 ## Cross-language transfer: alignment as free documentation
@@ -78,7 +80,7 @@ This matters for the initial adoption period especially. New language features h
 
 ## Agent tooling: grep as primitive
 
-The [SWE-bench (Jimenez et al., ICLR 2024)](https://arxiv.org/abs/2310.06770) and [SWE-agent (Yang et al., 2024)](https://arxiv.org/abs/2405.15793) evaluations show that coding agents rely on grep/search as their primary code navigation primitive. Failure to *find* the right code is a dominant failure mode.
+[SWE-bench (Jimenez et al., ICLR 2024)](https://arxiv.org/abs/2310.06770) evaluates agents on 2,294 real GitHub issues across 12 Python repositories. [SWE-agent (Yang et al., 2024)](https://arxiv.org/abs/2405.15793) builds on this, showing that a "custom agent-computer interface (ACI) significantly enhances an agent's ability to create and edit code files, navigate entire repositories, and execute tests." SWE-agent achieves 12.5% pass@1 on SWE-bench. Both evaluations confirm that coding agents rely on grep/search as their primary code navigation primitive. Failure to *find* the right code is a dominant failure mode.
 
 This creates a concrete operational gap between the two designs:
 
@@ -98,7 +100,7 @@ For the audit scenario — an agent scanning a codebase after migration to verif
 | Negation reasoning degrades 10–30% | Hossain et al. (ACL 2022) | Efficiency |
 | GPT-4-era models drop 15–25% on negation | Truong et al. (2023) | Efficiency |
 | Attention is presence-based; no mechanism for absent tokens | Clark et al. (2019), Voita et al. (2019) | Efficiency |
-| Positive framing followed 10–20% more reliably | Jang et al. (2023) | Efficiency |
+| Inverse scaling: larger models get *worse* at negation | Jang et al. (NeurIPS 2022 Workshop) | Efficiency |
 | Explicit annotations improve code understanding 5–15% | TypeScript vs. JavaScript studies | Efficiency |
 | Cross-language transfer clusters by syntactic similarity | MultiPL-E (Cassano et al., 2023) | Efficiency |
 | Agent success bottlenecked by code search | SWE-bench (ICLR 2024) | Efficiency |
