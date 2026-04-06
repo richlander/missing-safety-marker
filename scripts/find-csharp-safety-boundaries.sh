@@ -4,6 +4,9 @@
 #
 # Find safe methods that contain unsafe {} blocks — C#'s implicit safety
 # boundary. This is what D marks explicitly with @trusted.
+# This script is for current C# or other absence-based variants where the
+# boundary is still implicit. If the language has an explicit `safe` keyword,
+# prefer plain grep: `rg -w "safe" --type cs`.
 #
 # A safety boundary is a method NOT marked unsafe, NOT inside an unsafe
 # type, that contains unsafe { } blocks in its body.

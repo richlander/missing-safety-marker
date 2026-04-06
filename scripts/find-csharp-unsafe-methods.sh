@@ -4,6 +4,9 @@
 #
 # Find all methods that are unsafe — both explicitly marked and
 # implicitly unsafe (inside an unsafe class/struct).
+# This is most useful for current C# and proposed variants that still rely on
+# `unsafe` as the primary discoverable marker. In an explicit-`safe` world,
+# pair this with `rg -w "safe"` rather than treating it as the only inventory.
 #
 # This is what D splits into @system (explicitly unsafe) and what
 # falls outside @safe/@trusted. In C# the two categories are:
