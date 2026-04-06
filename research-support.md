@@ -29,6 +29,8 @@ The specific question for `safe` is different in kind. Both designs — `safe` k
 
 The question is whether an explicit positive marker reduces the cost of inference for agents working with safety-critical code. Can an agent discover, audit, and reason about safety boundaries with fewer steps, fewer tool calls, and less opportunity for error? The research literature does not test this exact scenario, but several well-established findings converge on the same answer.
 
+The absense of a keyword is somewhat like wanting the LLM to run a skill that has no trigger token.
+
 ## LLMs are measurably worse at absence and negation reasoning
 
 Inferring "safe" from the absence of `unsafe` is structurally a negation inference: the model must recognize that a keyword it expects in this context is *not present* and map that absence to a semantic conclusion. The literature consistently shows this is harder for transformers than matching an explicit token.
