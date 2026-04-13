@@ -1,41 +1,34 @@
 # Missing Safety Marker Proposal
 
-Memory safety v2 is one of the highest-stakes features we have taken on. It bears directly on the most foundational value proposition of the language and on how C# is compared to other industry languages. It demands rigorous design.
+[Memory safety v2](https://github.com/dotnet/designs/tree/main/accepted/2025/memory-safety) is one of the highest-stakes features we have taken on. It bears directly on the most foundational value propositions of the language and on how C# is compared to and interacts with other industry languages.
 
-This proposal adds a `safe` keyword to C# so that safety boundaries are explicitly marked, grep-discoverable, lossless under `git blame`, and form exhaustive roots of the audit graph. The addition of `safe` makes safety markings symmetric: code participating in unsafety is marked with intent, not inferred by absence. It is important to remember that safe boundary methods harbor unsafety; they are made safe by a claim, not by compiler validation.
+Memory safety v2 is a transformational change to the C# safety model. The new model closely matches Rust, making it a better target for this critique. In Rust, unsafe functions are bimodal. There are two sets of methods with interior `unsafe` blocks. One is marked `unsafe` and the other presents no safety-related signature marking at all. The two modes can be thought of as: "unsafe unsafe" and "safe unsafe". The former freely generates safety obligations for callers while the latter form is responsible to collapse them. The "unsafe" family name is common because they both harbor unsafety.
 
-## Design summary
+"unsafe unsafe" methods are not required to generate safety and are in fact in the business of deferring it. They need to be sound, but are typically conditionally safe on specific operations by callers (per safety documentation). "safe unsafe" methods have no such flexibility. They must be unconditionally safe, and are required to close the safety gaps created by their dependencies. That's the critical difference that motivates the proposal.
 
-The model distinguishes three roles:
+This proposal defines multiple "safety markers" to add to C#:
 
-- `unsafe` signature — unsafe to call; propagates a caller obligation
-- `safe` signature — safe to call; contains or discharges that obligation with guards and validation
-- `unsafe {}` block — implementation-local region where the dangerous operation actually occurs
+- Mark unsafe methods with [`safe` to suppress unsafe propagation](./safe-boundary-marker.md), resulting in a much brighter light where safety obligations matter most. This is instead of the safety claim and unsafe suppression being indicated via absence of a marker.
+- Add/enforce [Rust-style safety comments](./safety-comments.md)
+- Add [`Safety` attributes](./safety-comments.md) to unsafe methods to enable querying code for obligations, in part to sum the obligations that must be discharged at a given safe/unsafe boundary.
 
-The supporting documents below deepen the case. [CVE analysis](https://github.com/richlander/missing-marker-trusted/blob/main/cve-analysis.md) examines recent .NET cases where the bug was in the guard or validation around an unsafe operation, not only in the primitive itself. [Language comparison](https://github.com/richlander/missing-marker-trusted/blob/main/language-comparison.md) compares how different language designs expose or hide these review surfaces, using grep as a uniform proxy for complexity.
+## unsafe methods
 
-## Examples
+The business of unsafe methods:
 
-The [`CopyTo` method](https://github.com/dotnet/runtime/blob/a8836bb928cbb045bb19a1a2a3353f4aa23302f4/src/libraries/System.Private.CoreLib/src/System/String.cs#L427) is a concrete example of a method that would benefit from the `safe` keyword. Today:
+- Unsafe methods are by definition not safe to call for unconditional inputs or naive callers.
+- They take liberties with safety in service of their business.
+- The liberties are the subject of the safety documentation.
+- Safety can only be achieved in a caller by complying with the safety documentation.
+- Safety = sound unsafe implementation + good safety documentation + caller compliance.
 
-```csharp
-public void CopyTo(int sourceIndex, char[] destination, int destinationIndex, int count)
-{
-    ArgumentNullException.ThrowIfNull(destination);
-    ArgumentOutOfRangeException.ThrowIfNegative(count);
-    ArgumentOutOfRangeException.ThrowIfNegative(sourceIndex);
-    ArgumentOutOfRangeException.ThrowIfGreaterThan(count, Length - sourceIndex, nameof(sourceIndex));
-    ArgumentOutOfRangeException.ThrowIfGreaterThan(destinationIndex, destination.Length - count);
-    ArgumentOutOfRangeException.ThrowIfNegative(destinationIndex);
+Safety can be thought of as an eventual consistency property. The point of consistency is the unsafe boundary.
 
-    Buffer.Memmove(
-        destination: ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(destination), destinationIndex),
-        source: ref Unsafe.Add(ref _firstChar, sourceIndex),
-        elementCount: (uint)count);
-}
-```
+## `safe keyword`
 
-With the proposed model:
+This proposal advocates for an explicit `safe` marking for unsafe boundary methods. `safe` is solely a statement of the caller-contract and is therefore the opposite of `unsafe`. It is obviously not a statement of the implementation, which will by its very nature contain `unsafe` blocks. Explicit markings are intended to make method differences starkly apparent in C#, visible in source control diffs (left and right side always have a term to compare), and to make safety roots trivial to discover (simple grep queries).
+
+The [`CopyTo` method](https://github.com/dotnet/runtime/blob/a8836bb928cbb045bb19a1a2a3353f4aa23302f4/src/libraries/System.Private.CoreLib/src/System/String.cs#L427) is a concrete example of a method that would benefit from the `safe` keyword.
 
 ```csharp
 safe void CopyTo(int sourceIndex, char[] destination, int destinationIndex, int count)
@@ -57,127 +50,112 @@ safe void CopyTo(int sourceIndex, char[] destination, int destinationIndex, int 
 }
 ```
 
-`safe` on the signature marks this as a safety boundary — a method that is safe to call but contains interior `unsafe` code. The `unsafe` block localizes the dangerous operation. `CopyTo` upholds safety with `ThrowIfNull` and `ThrowIf*` range guards; these are safe precondition checks that justify the internal unsafe operation. By contrast, [Buffer.Memmove](https://github.com/dotnet/runtime/blob/0a726991ba412269ae8bb54ed3aa829466e0d0c8/src/libraries/System.Private.CoreLib/src/System/Buffer.cs#L134) is `unsafe` — it sits at the sharp edge and does not discharge the obligations as broadly.
+This example makes it clear that `CopyTo` has been attested to offer a safe contract. It structurally separates unsafe operations from the safe guards. The safe guards ensure that unsafe methods are called in a sound way. This pattern directly relates to the soundness of unsafe code being conditional on the way they are called.
 
-Note: C#, at the time of writing, does not force unsafe propagation, hence the lack of `unsafe` in `CopyTo`. This situation is addressed by the [CallerUnsafe proposal](https://github.com/dotnet/designs/blob/main/accepted/2025/memory-safety/caller-unsafe.md).
+The `safe` keyword proposal is a bit like driving on the Coquihalla, a notoriously dangerous highway in British Columbia. Mountain roads often have stiff guardrails on the "unsafe edge" to increase safety and make the boundary more evident. Best-in-class implementers add reflective contrasting color stripes to guardrails around the corners, enabling visibility in variety of light conditions, including in the dark.
 
-### The same pattern in Rust
+Tap the guardrail and you'll lose a strip of paint. It is certain to be an exceptional experience and it is OK to panic in the process. Safe and sound.
 
-The [`swap` function](https://github.com/rust-lang/rust/blob/e6b64a2f4c696b840f8a384ec28690eed6a5d267/library/alloc/src/collections/vec_deque/mod.rs#L970) in Rust is similar:
+Read [`safe` marks the unsafe boundary](./safe-boundary-marker.md) for a deeper analysis.
 
-```rust
- pub fn swap(&mut self, i: usize, j: usize) {
-     assert!(i < self.len());
-     assert!(j < self.len());
-     let ri = self.to_physical_idx(i);
-     let rj = self.to_physical_idx(j);
-     unsafe { ptr::swap(self.ptr().add(ri), self.ptr().add(rj)) }
- }
+## Safety documentation
+
+Safety related comments are common in standard libraries. They describe how methods can be called safely or the assumptions that were made to consider an algorithm safe. The Rust community has established a [safety comments](https://std-dev-guide.rust-lang.org/policy/safety-comments.html) standard. It is based on the observation that safety comments are special and only fully dispatch their intent if they are elevated above the fray of implementation concerns.
+
+```csharp
+/// <summary>
+/// Returns a reference to the element at `elementOffset` from `source`.
+/// </summary>
+/// <safety>
+/// `elementOffset` is not validated. The caller must ensure that the returned
+/// reference stays within the same allocated object as `source`.
+///
+/// The lifetime of the returned reference is not validated. The caller must
+/// ensure the underlying storage remains valid for any subsequent use.
+/// </safety>
+public static unsafe ref T Add<T>(ref T source, int elementOffset)
 ```
 
-The runtime `assert!` calls play a role analogous to `ThrowIfNull` and related guards in C#. The calls to `to_physical_idx` are also part of that proof. They are safe method calls whose correctness preserves the _fragile balance_ on which the safety claim depends. An explicit `safe` marker on `swap` would make it easier to determine algorithmically which safe functions participate in this safety claim. This same fragile-balance pattern is also common in the .NET runtime libraries.
+This update of `Unsafe.Add` `///` comments integrates and elevates safety comments to a more critical concern. They are now part of the "safety manual".
 
-This example from Rust includes `SAFETY` documentation:
+We can directly connect these obligations to the safe guards we saw in `String.CopyTo` above. As a reminder, `String.CopyTo` calls `Unsafe.Add`.
 
-```rust
-pub const fn split_at_checked(&self, mid: usize) -> Option<(&[T], &[T])> {
-    if mid <= self.len() {
-        // SAFETY: `[ptr; mid]` and `[mid; len]` are inside `self`, which
-        // fulfills the requirements of `split_at_unchecked`.
-        Some(unsafe { self.split_at_unchecked(mid) })
-    } else {
-        None
-    }
-}
+- `ThrowIfNegative(sourceIndex)` and `ThrowIfGreaterThan(count, Length - sourceIndex, nameof(sourceIndex))` discharge the `BufferLength` obligation for the source reference.
+- `ThrowIfNegative(destinationIndex)` and `ThrowIfGreaterThan(destinationIndex, destination.Length - count)` discharge the `BufferLength` obligation for the destination reference.
+- `ThrowIfNull(destination)` establishes that the destination storage exists before any reference arithmetic occurs.
+- Immediate use of the resulting references by `Buffer.Memmove` contains the `Lifetime` obligation; the references do not escape the method.
+
+Guards correlate with obligations; cause safety.
+
+Read [Standardized comments are safety evolution](./safety-comments.md) for a deeper analyis.
+
+## Safety attributes
+
+Safety attributes summarize safety comments into a queryable typed marker. Attributes are the natural next step to describe obligations with a closed taxonomy.
+
+Each `unsafe` method declares one or more `[Safety(SafetyKind.X, "description")]` attributes, one per residual obligation. `safe` methods declare none, because they have nothing to declare.
+
+A defined taxonomy has multiple benefits:
+
+- Grepable over source
+- Reflection-queryable over binaries
+- Straightforward to determine the set of obligations that should be discharged between (indirect) callees and the root boundary method.
+- Free-form safety comment text will tend to adopt the same terms
+
+We can update `Unsafe.Add` one more time, now with safety attributes:
+
+```csharp
+/// <summary>
+/// Returns a reference to the element at `elementOffset` from `source`.
+/// </summary>
+/// <safety>
+/// `elementOffset` is not validated. The caller must ensure that the returned
+/// reference stays within the same allocated object as `source`.
+///
+/// The lifetime of the returned reference is not validated. The caller must
+/// ensure the underlying storage remains valid for any subsequent use.
+/// </safety>
+[Safety(SafetyKind.BufferLength)]
+[Safety(SafetyKind.Lifetime)]
+public static unsafe ref T Add<T>(ref T source, int elementOffset)
 ```
 
-### What happens when guards are wrong: BigInteger
+Again, `String.CopyTo` supplies the matching proof:
 
-[CVE-2024-30045](https://github.com/richlander/missing-marker-trusted/blob/main/cve-analysis.md#cve-2024-30045--heap-buffer-overflow-in-unsafe-ref-struct-biginteger) illustrates the lifecycle of a safety boundary failure. `Number.BigInteger` was declared `unsafe ref struct` — an old-style C# fixed buffer with raw pointer access and no bounds checking. Its `MaxBlockCount` constant was one short, causing heap buffer overflows during carry propagation.
+- `sourceIndex` guards -> `BufferLength` for the source
+- `destinationIndex` guards -> `BufferLength` for the destination
+- `ThrowIfNull(destination)` -> destination storage exists
+- immediate `Buffer.Memmove` use -> `Lifetime` is contained
 
-The fix timeline shows three stages:
+There is no `SafetyObligation` and `SafetyDischarge` pair. This choice is based on the observation that the risk of fidelity due to code drift is assymetric, with `SafetyObligation` being annoying and `SafetyDischarage` being devestating. The single `Safety` attribute is the `SafetyObligation` side of that pair.
 
-1. **Insufficient guards over an unsafe resource** — the original code relied on `Debug.Assert` (stripped in release builds) to guard `_blocks[]` indexing. No runtime check prevented out-of-bounds writes.
-2. **Fully guarded** — the [CVE fix](https://github.com/dotnet/runtime/commit/173b4b8a96434a3eedaabca529a2083b16d616f3) added runtime bounds checks (`unchecked((uint)(length)) >= MaxBlockCount`) across six methods, but kept the `fixed` buffer and `unsafe ref struct` declaration.
-3. **Safe abstraction** — a [later modernization](https://github.com/dotnet/runtime/commit/e155b45eb750ad5ab1a8060ba088493354d4ccb3) replaced `private fixed uint _blocks[MaxBlockCount]` with `[InlineArray]` and removed `unsafe` from the type entirely. The compiler now lowers `_blocks[i]` to bounds-checked `Span<T>` access — the manual guards are no longer the last line of defense.
+Read [Standardized comments are safety evolution](./safety-comments.md) for a deeper analysis. The introduction of safety attributes comes after the half-way point.
 
-Under the proposed model, `unsafe ref struct` would have been illegal. Each method performing unchecked indexing would have required an explicit `unsafe` block, and the containing methods would have been marked `safe` or `unsafe` — making the safety boundary visible and auditable from the start.
+## Stress test
 
-## Why mark `safe` explicitly
+We can perform a thought exercise about a hyper-successful Rust. What if all the C++ code in .NET apps was replaced with Rust? This isn't even that hard to imagine. One can imagine establish a safer profile of C ABI across the boundary. We're actually nearly there with `LibraryImport`. We can better prepare for that future by stress testing safety as a currency that "interops" across the boundary. Concepts that are unspeakable or that don't naturally compose are opportunities to update the model.
 
-`safe` indicates three starting points:
+## Relation to AI
 
-- Where the safety claim is made and the audit has the most relevant context.
-- Where the unsafe call graph rooted at that claim can be discovered.
-- Where the safe helper code participating in the proof can be discovered.
+We don't know where the industry is headed next given the quick rise of agents. AI research tells us well-defined grammars perform better than weaker ones. It also tells us AIs are much weaker at absense or negation than positive terms. We also know that confidence and alignment are unsolved problems. There is no frequently cited research that advocates for simultaneously weakening grammars while increasing critical characteristics such as safety as a profitable direction.
 
-If a method with interior unsafe code is intended to remain safe-callable, that status should be explicit rather than inferred from the absence of `unsafe`. Otherwise one missing marker has to carry too much meaning: genuinely safe boundary method, accidentally unmarked method, or intentionally misleading code. That ambiguity is exactly what explicit `safe` is meant to remove.
+## Complete analysis
 
-Roslyn and similar tools can already recover much of this information. The design question is whether the source should state it directly or require deeper inference. Explicit markings lower the burden on reviewers, maintainers, and tools. The syntax cost is modest; the review value can be high in safety-critical code.
+The following documents make this case, listed in recommend order of reading:
 
-## Prior art
-
-No safe-by-default language marks these boundary methods today — not C#, Rust, or Swift. The [C# CallerUnsafe](https://github.com/dotnet/designs/blob/main/accepted/2025/memory-safety/caller-unsafe.md) proposal adds propagation, but adopts the same "absence is the marker for safety" approach.
-
-Rust has prior art with `safe`. In [RFC 3484 — unsafe extern blocks](https://rust-lang.github.io/rfcs/3484-unsafe-extern-blocks.html), Rust added `safe` in a narrow FFI context to distinguish items that are safe to call from ones that remain `unsafe`. That does not yet solve the boundary-method problem shown by `swap`, but it does establish both the keyword and the design precedent. A future Rust edition could in principle expand that usage toward ordinary safety-boundary methods and move closer to the model proposed here. The CallerUnsafe proposal also adopts `safe extern`.
-
-## Defense in depth
-
-The problem with absence being meaningful is that a single bit encodes a ternary state: unsafe, safe by best-effort intention, or safe by accident or malicious intention. The [xz incident with Jia Tan](https://en.wikipedia.org/wiki/XZ_Utils_backdoor) is a reminder that subtle diffs and review ambiguity matter. The addition of a `safe` keyword explicitly reminds code writers and reviewers to match claim with code. Diffs will then carry `safe` or `unsafe` on both sides — never an empty string transition — unless unsafe code has been removed entirely, at which point validation transitions to the compiler. See [Appendix: Defense in Depth](https://github.com/richlander/missing-marker-trusted/blob/main/appendices.md#defense-in-depth-the-xz-backdoor-lesson) for the fuller discussion.
-
-These measures also help tool-assisted review and migration at scale. Explicit keywords provide context with less inference.
-
-## Grep-ability
-
-Here's the uniform grep pattern if both `safe` and `unsafe` keywords are required:
-
-```bash
-rg -w "safe" --type cs src/libraries         # safety boundary signatures
-rg -w "unsafe" --type cs src/libraries       # unsafe signatures + blocks
-rg "unsafe\s*\{" --type cs src/libraries     # unsafe blocks only
-```
-
-Pivot the keyword, narrow to blocks. Simple, symmetric, always accurate. These enable discovery of the safety boundary at its roots, the unsafe surface area at its leaves, and unsafe blocks generally.
-
-Without the `safe` keyword, finding caller-safe unsafe methods requires something like:
-
-```bash
-grep -nP '^\s*(public|private|protected|internal|static|virtual|override|abstract|sealed|async|partial|\w+)\s+\w+\s*\(' file.cs | grep -v '\bunsafe\b'
-```
-
-This won't work in many cases and is offered as a failure case. Any claim that grep does not matter also has to explain why signature-level attestation and diff visibility are unimportant in review-heavy infrastructure code.
-
-Search ergonomics are a fitness property of the safety model — see [scoring methodology](https://github.com/richlander/missing-marker-trusted/blob/main/scoring-methodology.md#why-grep) for the full rationale. Rust and Swift face the same structural challenge. Explicit markings make the unsafe domain easier to review, explain, and audit.
-
-## Scoring
-
-The [scoring methodology](https://github.com/richlander/missing-marker-trusted/blob/main/scoring-methodology.md) defines the full framework. At a high level, the model rewards safety designs that are sound, explicit, and enforced, and penalizes designs that blur those signals. The percentages below are heuristic outputs of that model, intended for ordinal comparison rather than precise measurement.
-
-| Design | Score |
-|--------|-------|
-| C# (optimal) — `unsafe` + `safe`, default-on | **87.5%** |
-| Rust | **77.5%** |
-| C# + `unsafe` + `safe` (opt-in) | **72.5%** |
-| C# + `unsafe` keyword (no `safe`) | **50.0%** |
-| Swift | **50.0%** |
-| D | **40.0%** |
-| C# (current) | **35.0%** |
-| C# + `RequiresUnsafe` | **35.0%** |
-
-The scoring model boils down to three questions:
-
-- Is the safety model uniform and sound?
-- Is the relevant safety information explicit and grep-discoverable in the code?
-- Is the model enforced by default?
-
-The detailed methodology then adds demerits for grep ambiguity and other audit friction. The opportunity for C# is significant. Moving to a stronger, explicit safety regime includes breaking changes. It will be important to enforce this new safety regime at some point. The existing safety system is dated and is no longer sufficient for code like the standard library whose bread-and-butter is unsafety.
-
-## Supporting documents
-
-- [Notable patterns](https://github.com/richlander/missing-marker-trusted/blob/main/notable-patterns.md) — real-world examples from .NET, Rust, and Swift standard libraries
-- [Language comparison](https://github.com/richlander/missing-marker-trusted/blob/main/language-comparison.md) — grep-based discoverability across D, Rust, Swift, and C#, in ranking order
-- [Scoring methodology](https://github.com/richlander/missing-marker-trusted/blob/main/scoring-methodology.md) — the grep test framework and detailed scoring
-- [CVE analysis](https://github.com/richlander/missing-marker-trusted/blob/main/cve-analysis.md) — 40 .NET CVEs analyzed for safety boundary relevance
+- [`safe` marks the unsafe boundary](./safe-boundary-marker.md)
+- [Standardized comments as safety evolution](./safety-comments.md)
+- [Safety model comparison](./safety-model.md) — the Rust vs C# memory-safety model, stated directly and side-by-side
+- [Notable patterns](./notable-patterns.md) — real-world examples from .NET, Rust, and Swift standard libraries
+- [CVE analysis](./cve-analysis.md) — 40 .NET CVEs analyzed for safety boundary relevance
+- [Audit graphs](./audit-graphs.md) — why shallow, DAG-like proof structure is reviewable and cyclic proof graphs are not
+- [Interop identity transform](./interop-identity-transform.md) — use C#-Rust FFI round-trips as a validation harness for the safety model
+- [Language comparison](./language-comparison.md) — grep-based discoverability across D, Rust, Swift, and C#, in ranking order
+- [Scoring methodology](./scoring-methodology.md) — the grep test framework and detailed scoring
 - [Runtime replay inspection guide](runtime-replay-cases.md) — direct links to the vulnerable snapshots, controls, and proposal branches used in the runtime benchmark
-- [Research support](https://github.com/richlander/missing-marker-trusted/blob/main/research-support.md) — how explicit safety markers improve LLM accuracy and efficiency
-- [Appendices](https://github.com/richlander/missing-marker-trusted/blob/main/appendices.md) — optional background on lossless attestations, xz, binary distribution, agent workflows, and keyword lineage
+- [Research support](./research-support.md) — how explicit safety markers improve LLM accuracy and efficiency
+- [Appendices](./appendices.md) — optional background on lossless attestations, xz, binary distribution, agent workflows, and keyword lineage
+
+## Scratch
+
+Deep analysis of Rust and C# demonstrates the degree to which they are a good pairing, particularly after memory safety v2 is delivered. We should be motivated to ensure this pairing is attractive as possible, both because of the increasing popularity of Rust, but because no other native toolchain offers the same attractive similarlity (async, strict safety, FFI friendly, `///` comments), and disimilarity (GC vs no GC). A key way to make this pairing attractive is aligning the safety models (as much as possible). The opportunity can be visualized as safe p/invokes to safe Rust with no break in safety analysis through the call chain (and only one GC).
